@@ -39,8 +39,7 @@ func Upsample2D(x *Node, scale int) (*Node, error) {
 	xShape := x.Shape()
 	op := newUpsampleOp(xShape, scale-1)
 	_ = group
-	retVal, err := ApplyOp(op, x)
-	return retVal, err
+	return ApplyOp(op, x)
 }
 
 func (op *upsampleOp) Arity() int {
@@ -61,6 +60,8 @@ func (op *upsampleOp) String() string {
 }
 func (op *upsampleOp) InferShape(inputs ...DimSizer) (tensor.Shape, error) {
 	s := inputs[0].(tensor.Shape).Clone()
+	s[2] = s[2] * (1 + op.stride)
+	s[3] = s[3] * (1 + op.stride)
 	return s, nil
 }
 func (op *upsampleOp) Type() hm.Type {

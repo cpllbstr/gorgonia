@@ -144,7 +144,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = convBlock
 
 				layers = append(layers, &l)
-				fmt.Println(l)
+				fmt.Println(i, l, "\n", input.Shape())
 
 				filtersIdx = filters
 				break
@@ -169,7 +169,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = upsampleBlock
 
 				layers = append(layers, &l)
-				fmt.Println(l)
+				fmt.Println(i, l, "\n", input.Shape())
 
 				// @todo upsample node
 
@@ -232,7 +232,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = routeBlock
 
 				layers = append(layers, &ll)
-				fmt.Println(ll)
+				fmt.Println(i, ll, "\n", input.Shape())
 
 				// @todo upsample node
 				// @todo evaluate 'prevFilters'
@@ -303,7 +303,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = yoloBlock
 
 				layers = append(layers, &l)
-				fmt.Println(l)
+				fmt.Println(i, l, "\n", input.Shape())
 
 				// @todo detection node? or just flow?
 
@@ -344,7 +344,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = maxpoolingBlock
 
 				layers = append(layers, &l)
-				fmt.Println(l)
+				fmt.Println(i, l, "\n", input.Shape())
 
 				filtersIdx = prevFilters
 				break
@@ -370,9 +370,6 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 			layer := l.(*convLayer)
 			if layer.batchNormalize > 0 && layer.batchNormNode != nil {
 				biasesNum := layer.batchNormNode.Shape()[0]
-
-				biases := weightsData[ptr : ptr+biasesNum]
-				_ = biases
 				ptr += biasesNum
 
 				weights := weightsData[ptr : ptr+biasesNum]
