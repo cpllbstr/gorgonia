@@ -36,6 +36,9 @@ func main() {
 
 	m := gorgonia.NewTapeMachine(g)
 
+	// n := g.ByName("sconv_0")
+	// fmt.Println(input.Value())
+
 	err = m.RunAll()
 	if err != nil {
 		panic(err)

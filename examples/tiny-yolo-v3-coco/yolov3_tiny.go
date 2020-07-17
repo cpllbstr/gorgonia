@@ -369,18 +369,45 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 			fmt.Println("Loading weights: ", layer)
 			if layer.batchNormalize > 0 && layer.outShape.TotalSize() > 0 {
 				biasesNum := layer.bnOut.Shape()[1]
+				isize := layer.bnOut.Shape()[2:4].TotalSize()
 
 				beta = weightsData[ptr : ptr+biasesNum]
-				err = gorgonia.Let(layer.beta, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(beta)))
+				fmt.Println(len(beta), layer.bnOut.Shape(), isize)
+				betat, err := tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(beta)).Repeat(0, isize)
+				if err != nil {
+					panic(err)
+				}
+				err = betat.Reshape(layer.bnOut.Shape()...)
+				if err != nil {
+					panic(err)
+				}
+				err = gorgonia.Let(layer.beta, betat)
 				ptr += biasesNum
+				if err != nil {
+					panic(err)
+				}
 
 				gamma = weightsData[ptr : ptr+biasesNum]
-				err = gorgonia.Let(layer.gamma, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(gamma)))
+				gammat, err := tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(gamma)).Repeat(0, isize)
+				if err != nil {
+					panic(err)
+				}
+				err = gammat.Reshape(layer.bnOut.Shape()...)
+				if err != nil {
+					panic(err)
+				}
+				err = gorgonia.Let(layer.gamma, gammat)
 				ptr += biasesNum
+				if err != nil {
+					panic(err)
+				}
 
 				means = weightsData[ptr : ptr+biasesNum]
 				err = gorgonia.Let(layer.means, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(means)))
 				ptr += biasesNum
+				if err != nil {
+					panic(err)
+				}
 
 				vars = weightsData[ptr : ptr+biasesNum]
 				err = gorgonia.Let(layer.vars, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(vars)))
@@ -396,19 +423,28 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 			weightsNumel := layer.kernels.Shape().TotalSize()
 			kernelW := weightsData[ptr : ptr+weightsNumel]
 
+			isize := layer.kernels.Shape()[1:4].TotalSize()
 			if layer.batchNormalize > 0 && layer.outShape.TotalSize() > 0 {
 				for i := 0; i < layer.kernels.Shape()[0]; i++ {
 					scale := gamma[i] / float32(math.Sqrt(float64(vars[i]+epsilon)))
-
 					beta[i] = beta[i] - means[i]*scale
-					isize := layer.kernels.Shape()[1:4].TotalSize()
 					for j := 0; j < isize; j++ {
 						kernelW[isize*i+j] = kernelW[isize*i+j] * scale
 					}
 				}
 			}
+			if layer.bias {
+				// fmt.Println(biases)
+				biasT, err := tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()[0]), tensor.WithBacking(biases)).Repeat(0, isize)
+				err = biasT.Reshape(layer.kernels.Shape()...)
+				// fmt.Println(biasT)
+				if err != nil {
+					panic(err)
+				}
+				err = gorgonia.Let(layer.biases, biasT)
+			}
+			fmt.Println("SHAPE:", layer.kernels.Shape())
 			err = gorgonia.Let(layer.kernels, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()...), tensor.WithBacking(kernelW)))
-			err = gorgonia.Let(layer.biases, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()[0]), tensor.WithBacking(biases)))
 			if err != nil {
 				panic(err)
 			}

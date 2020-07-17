@@ -45,8 +45,9 @@ func (l *convLayer) Type() string {
 
 func (l *convLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gorgonia.Node, error) {
 	l.kernels = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.filters, input[0].Shape()[1], l.kernelSize, l.kernelSize), gorgonia.WithName(fmt.Sprintf("conv_%d", l.layerIndex)))
-	l.biases = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(l.filters), gorgonia.WithName(fmt.Sprintf("bias_%d", l.layerIndex)))
-
+	if l.bias {
+		l.biases = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.kernels.Shape()...), gorgonia.WithName(fmt.Sprintf("bias_%d", l.layerIndex)))
+	}
 	var err error
 	l.convOut, err = gorgonia.Conv2d(input[0], l.kernels, tensor.Shape{l.kernelSize, l.kernelSize}, []int{l.padding, l.padding}, []int{l.stride, l.stride}, []int{1, 1})
 	if err != nil {
@@ -58,17 +59,16 @@ func (l *convLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gor
 		l.gamma = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.convOut.Shape().Clone()...), gorgonia.WithName(fmt.Sprintf("gamma_%d", l.layerIndex)))
 		l.vars = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(l.filters), gorgonia.WithName(fmt.Sprintf("vars_%d", l.layerIndex)))
 		l.means = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(l.filters), gorgonia.WithName(fmt.Sprintf("means_%d", l.layerIndex)))
-
 		l.bnOut, l.gamma, l.beta, l.bnOp, err = gorgonia.BatchNorm(l.convOut, l.gamma, l.beta, 0.1, 10e-5)
 		if err != nil {
 			return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare batch normalization operation")
 		}
 		l.outShape = l.bnOut.Shape()
 	} else {
-		l.convOut, err = gorgonia.Add(l.convOut, l.biases)
-		if err != nil {
-			panic(err)
-		}
+		// l.convOut, err = gorgonia.Add(l.convOut, l.biases)
+		// if err != nil {
+		// panic(err)
+		// }
 		l.outShape = l.convOut.Shape()
 		l.bnOut = l.convOut
 	}

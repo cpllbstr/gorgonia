@@ -37,6 +37,7 @@ func (l *yoloLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gor
 		return nil, fmt.Errorf("Input shape for YOLO layer is nil")
 	}
 	preparedTensor := gorgonia.NewTensor(g, tensor.Float64, 4, gorgonia.WithShape(inputN.Shape()...), gorgonia.WithName("yolo"), gorgonia.WithInit(gorgonia.Zeroes()))
+	fmt.Println(l.flattenAhcnors, l.inputSize, l.classesNum)
 	yoloNode, err := gorgonia.YOLOv3(preparedTensor, l.flattenAhcnors, l.inputSize, l.classesNum)
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't prepare YOLOv3 operation")
