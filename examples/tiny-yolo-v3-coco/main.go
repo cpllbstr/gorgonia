@@ -28,6 +28,18 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	img, err := GetFloat32Image("./data/dog_416x416.jpg")
+	if err != nil {
+		panic(err)
+	}
+	gorgonia.Let(input, tensor.New(tensor.WithShape(1, 3, 416, 416), tensor.WithBacking(img)))
+
+	m := gorgonia.NewTapeMachine(g)
+
+	err = m.RunAll()
+	if err != nil {
+		panic(err)
+	}
 
 	_ = model
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -121,21 +122,17 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 					batchNormalize: batchNormalize,
 					bias:           bias,
 				}
-				// conv node
-				convNode := gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(filters, prevFilters, kernelSize, kernelSize), gorgonia.WithName(fmt.Sprintf("conv_%d", i)))
 
-				ll.convNode = convNode
-				if batchNormalize != 0 {
-					batchNormNode := gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("batch_norm_%d", i)))
-					ll.batchNormNode = batchNormNode
-				}
-				if activation == "leaky" {
-					leakyNode := gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(convNode.Shape()...), gorgonia.WithName(fmt.Sprintf("leaky_%d", i)))
-					ll.activationNode = leakyNode
-				}
+				// ll.kernels = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(filters, prevFilters, kernelSize, kernelSize), gorgonia.WithName(fmt.Sprintf("conv_%d", i)))
+
+				// if batchNormalize != 0 {
+				// 	ll.beta = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("beta_%d", i)))
+				// 	ll.gamma = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("gamma_%d", i)))
+				// 	ll.vars = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("vars_%d", i)))
+				// 	ll.means = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("means_%d", i)))
+				// }
 
 				var l layerN = ll
-
 				convBlock, err := l.ToNode(g, input)
 				if err != nil {
 					fmt.Printf("\tError preparing Convolutional block: %s\n", err.Error())
@@ -358,7 +355,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 	}
 
 	fmt.Println("Loading weights...")
-	lastIdx := 5 // skip first 5 values
+	// lastIdx := 5 // skip first 5 values
 	epsilon := float32(0.000001)
 
 	ptr := 0
@@ -368,37 +365,55 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 		// Ignore everything except convolutional layers
 		if layerType == "convolutional" {
 			layer := l.(*convLayer)
-			if layer.batchNormalize > 0 && layer.batchNormNode != nil {
-				biasesNum := layer.batchNormNode.Shape()[0]
+			var beta, gamma, means, vars, biases []float32
+			fmt.Println("Loading weights: ", layer)
+			if layer.batchNormalize > 0 && layer.outShape.TotalSize() > 0 {
+				biasesNum := layer.bnOut.Shape()[1]
+
+				beta = weightsData[ptr : ptr+biasesNum]
+				err = gorgonia.Let(layer.beta, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(beta)))
 				ptr += biasesNum
 
-				weights := weightsData[ptr : ptr+biasesNum]
-				_ = weights
+				gamma = weightsData[ptr : ptr+biasesNum]
+				err = gorgonia.Let(layer.gamma, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(gamma)))
 				ptr += biasesNum
 
-				means := weightsData[ptr : ptr+biasesNum]
-				_ = means
+				means = weightsData[ptr : ptr+biasesNum]
+				err = gorgonia.Let(layer.means, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(means)))
 				ptr += biasesNum
 
-				vars := weightsData[ptr : ptr+biasesNum]
-				_ = vars
+				vars = weightsData[ptr : ptr+biasesNum]
+				err = gorgonia.Let(layer.vars, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(vars)))
 				ptr += biasesNum
-
-				//@todo load weights/biases and etc.
+				if err != nil {
+					panic(err)
+				}
 			} else {
-				biasesNum := layer.convNode.Shape()[0]
-				convBiases := weightsData[ptr : ptr+biasesNum]
-				_ = convBiases
-				ptr += biasesNum
-				//@todo load weights/biases and etc.
+				kernelNum := layer.kernels.Shape()[0]
+				biases = weightsData[ptr : ptr+kernelNum]
+				ptr += kernelNum
 			}
+			weightsNumel := layer.kernels.Shape().TotalSize()
+			kernelW := weightsData[ptr : ptr+weightsNumel]
 
-			weightsNumel := layer.convNode.Shape().TotalSize()
+			if layer.batchNormalize > 0 && layer.outShape.TotalSize() > 0 {
+				for i := 0; i < layer.kernels.Shape()[0]; i++ {
+					scale := gamma[i] / float32(math.Sqrt(float64(vars[i]+epsilon)))
 
+					beta[i] = beta[i] - means[i]*scale
+					isize := layer.kernels.Shape()[1:4].TotalSize()
+					for j := 0; j < isize; j++ {
+						kernelW[isize*i+j] = kernelW[isize*i+j] * scale
+					}
+				}
+			}
+			err = gorgonia.Let(layer.kernels, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()...), tensor.WithBacking(kernelW)))
+			err = gorgonia.Let(layer.biases, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()[0]), tensor.WithBacking(biases)))
+			if err != nil {
+				panic(err)
+			}
 			ptr += weightsNumel
 		}
 	}
-
-	_, _ = lastIdx, epsilon
 	return nil, nil
 }

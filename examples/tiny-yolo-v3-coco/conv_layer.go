@@ -19,12 +19,17 @@ type convLayer struct {
 
 	layerIndex int
 
-	convNode       *gorgonia.Node
-	batchNormNode  *gorgonia.Node
-	activationNode *gorgonia.Node
+	//learnables
+	means, vars *gorgonia.Node
 
-	batchOut, gamma, beta *gorgonia.Node
-	batchNormOperation    *gorgonia.BatchNormOp
+	//loadables
+	kernels, gamma, beta, biases *gorgonia.Node
+
+	convOut, bnOut, actOut *gorgonia.Node
+
+	outShape tensor.Shape
+
+	bnOp *gorgonia.BatchNormOp
 }
 
 func (l *convLayer) String() string {
@@ -39,29 +44,42 @@ func (l *convLayer) Type() string {
 }
 
 func (l *convLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gorgonia.Node, error) {
+	l.kernels = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.filters, input[0].Shape()[1], l.kernelSize, l.kernelSize), gorgonia.WithName(fmt.Sprintf("conv_%d", l.layerIndex)))
+	l.biases = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(l.filters), gorgonia.WithName(fmt.Sprintf("bias_%d", l.layerIndex)))
 
-	convOut, err := gorgonia.Conv2d(input[0], l.convNode, tensor.Shape{l.kernelSize, l.kernelSize}, []int{l.padding, l.padding}, []int{l.stride, l.stride}, []int{1, 1})
+	var err error
+	l.convOut, err = gorgonia.Conv2d(input[0], l.kernels, tensor.Shape{l.kernelSize, l.kernelSize}, []int{l.padding, l.padding}, []int{l.stride, l.stride}, []int{1, 1})
 	if err != nil {
 		return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare convolution operation")
 	}
 
 	if l.batchNormalize > 0 {
-		scale := gorgonia.NewTensor(g, gorgonia.Float32, 4, gorgonia.WithShape(convOut.Shape()...), gorgonia.WithName(fmt.Sprintf("scale_%d", l.layerIndex)))
-		bias := gorgonia.NewTensor(g, gorgonia.Float32, 4, gorgonia.WithShape(convOut.Shape()...), gorgonia.WithName(fmt.Sprintf("bias_%d", l.layerIndex)))
-		l.batchOut, l.gamma, l.beta, l.batchNormOperation, err = gorgonia.BatchNorm(convOut, scale, bias, 0.1, 10e-5)
+		l.beta = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.convOut.Shape().Clone()...), gorgonia.WithName(fmt.Sprintf("beta_%d", l.layerIndex)))
+		l.gamma = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.convOut.Shape().Clone()...), gorgonia.WithName(fmt.Sprintf("gamma_%d", l.layerIndex)))
+		l.vars = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(l.filters), gorgonia.WithName(fmt.Sprintf("vars_%d", l.layerIndex)))
+		l.means = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(l.filters), gorgonia.WithName(fmt.Sprintf("means_%d", l.layerIndex)))
+
+		l.bnOut, l.gamma, l.beta, l.bnOp, err = gorgonia.BatchNorm(l.convOut, l.gamma, l.beta, 0.1, 10e-5)
 		if err != nil {
 			return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare batch normalization operation")
 		}
+		l.outShape = l.bnOut.Shape()
 	} else {
-		l.batchOut = convOut
+		l.convOut, err = gorgonia.Add(l.convOut, l.biases)
+		if err != nil {
+			panic(err)
+		}
+		l.outShape = l.convOut.Shape()
+		l.bnOut = l.convOut
 	}
 
 	if l.activation == "leaky" {
-		activationOut, err := gorgonia.LeakyRelu(l.batchOut, 0.1)
+		var err error
+		l.actOut, err = gorgonia.LeakyRelu(l.bnOut, 0.1)
 		if err != nil {
 			return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare activation operation")
 		}
-		return activationOut, nil
+		return l.actOut, nil
 	}
-	return convOut, nil
+	return l.convOut, nil
 }
