@@ -12,23 +12,35 @@ import (
 )
 
 type yoloOp struct {
+	mask       []int
 	anchors    []int
 	inpDim     int
 	numClasses int
+	target     *Node
 }
 
-func newYoloOp(n *Node, anchors []int, imheight, numclasses int) *yoloOp {
-	upsampleop := &yoloOp{
-		anchors:    anchors,
+func newYoloOp(n *Node, anchors, mask []int, imheight, numclasses int, ignoreTresh float32, target ...*Node) *yoloOp {
+
+	op := &yoloOp{
+		mask:       mask,
 		inpDim:     imheight,
 		numClasses: numclasses,
 	}
-	return upsampleop
+	if len(target) == 0 {
+		for _, m := range mask {
+			op.anchors = append(op.anchors, anchors[2*m], anchors[2*m+1])
+		}
+		op.mask = nil
+	} else {
+		op.anchors = anchors
+		op.mask = mask
+	}
+	return op
 }
 
 // YOLOv3 https://arxiv.org/abs/1804.02767
-func YOLOv3(x *Node, anchors []int, imheight, numclasses int) (*Node, error) {
-	op := newYoloOp(x, anchors, imheight, numclasses)
+func YOLOv3(x *Node, anchors, mask []int, imheight, numclasses int, ignoreTresh float32, target ...*Node) (*Node, error) {
+	op := newYoloOp(x, anchors, mask, imheight, numclasses, ignoreTresh, target...)
 	retVal, err := ApplyOp(op, x)
 	return retVal, err
 }

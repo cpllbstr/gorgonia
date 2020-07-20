@@ -29,10 +29,6 @@ func (l *routeLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*go
 	if l.secondLayerIdx > 0 {
 		concatNodes = append(concatNodes, input[l.secondLayerIdx])
 	}
-	fmt.Println("ROUTE:", len(concatNodes))
-	for _, c := range concatNodes {
-		fmt.Println(c.Shape())
-	}
 	routeNode, err := gorgonia.Concat(1, concatNodes...)
 	if err != nil {
 		return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare route operation")

@@ -1,10 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"gorgonia.org/gorgonia"
-	G "gorgonia.org/gorgonia"
 	"gorgonia.org/tensor"
 )
 
@@ -20,7 +20,7 @@ var (
 )
 
 func main() {
-	g := G.NewGraph()
+	g := gorgonia.NewGraph()
 
 	input := gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(1, channels, width, height), gorgonia.WithName("input"))
 
@@ -28,21 +28,24 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	fmt.Println("Net Loaded!\nLoading input...")
 	img, err := GetFloat32Image("./data/dog_416x416.jpg")
 	if err != nil {
 		panic(err)
 	}
 	gorgonia.Let(input, tensor.New(tensor.WithShape(1, 3, 416, 416), tensor.WithBacking(img)))
 
+	fmt.Println("Input loaded!\nForwarding net...")
 	m := gorgonia.NewTapeMachine(g)
-
-	// n := g.ByName("sconv_0")
-	// fmt.Println(input.Value())
-
 	err = m.RunAll()
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("Net forwarded!")
+	for _, o := range model.out {
+		fmt.Println(o.Shape())
+	}
+	// out := gorgonia.Must(gorgonia.Concat(1, model.out...))
+	// fmt.Println(out)
 
-	_ = model
 }

@@ -22,7 +22,6 @@ func (l *maxPoolingLayer) Type() string {
 }
 
 func (l *maxPoolingLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gorgonia.Node, error) {
-	fmt.Printf("%+v\n", l.stride)
 	maxpoolOut, err := gorgonia.MaxPool2D(input[0], tensor.Shape{l.size, l.size}, []int{0, 1, 0, 1}, []int{l.stride, l.stride})
 	if err != nil {
 		return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare max pooling operation")

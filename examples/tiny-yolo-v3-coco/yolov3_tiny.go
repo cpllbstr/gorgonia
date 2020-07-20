@@ -15,13 +15,7 @@ import (
 type YoloV3Tiny struct {
 	g *gorgonia.ExprGraph
 
-	out *gorgonia.Node
-
-	biases  map[string][]float32
-	gammas  map[string][]float32
-	means   map[string][]float32
-	vars    map[string][]float32
-	kernels map[string][]float32
+	out []*gorgonia.Node
 }
 
 // type layer struct {
@@ -57,6 +51,10 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 	prevFilters := 3
 
 	networkNodes := []*gorgonia.Node{}
+
+	model := &YoloV3Tiny{
+		g: g,
+	}
 
 	blocks := buildingBlocks[1:]
 	for i := range blocks {
@@ -123,15 +121,6 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 					bias:           bias,
 				}
 
-				// ll.kernels = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(filters, prevFilters, kernelSize, kernelSize), gorgonia.WithName(fmt.Sprintf("conv_%d", i)))
-
-				// if batchNormalize != 0 {
-				// 	ll.beta = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("beta_%d", i)))
-				// 	ll.gamma = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("gamma_%d", i)))
-				// 	ll.vars = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("vars_%d", i)))
-				// 	ll.means = gorgonia.NewTensor(g, tensor.Float32, 1, gorgonia.WithShape(filters), gorgonia.WithName(fmt.Sprintf("means_%d", i)))
-				// }
-
 				var l layerN = ll
 				convBlock, err := l.ToNode(g, input)
 				if err != nil {
@@ -141,7 +130,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = convBlock
 
 				layers = append(layers, &l)
-				fmt.Println(i, l, "\n", input.Shape())
+				fmt.Println(i, l)
 
 				filtersIdx = filters
 				break
@@ -166,7 +155,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = upsampleBlock
 
 				layers = append(layers, &l)
-				fmt.Println(i, l, "\n", input.Shape())
+				fmt.Println(i, l)
 
 				// @todo upsample node
 
@@ -229,7 +218,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = routeBlock
 
 				layers = append(layers, &ll)
-				fmt.Println(i, ll, "\n", input.Shape())
+				fmt.Println(i, ll)
 
 				// @todo upsample node
 				// @todo evaluate 'prevFilters'
@@ -268,6 +257,13 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 					fmt.Printf("Number of elemnts in 'anchors' parameter for yolo layer should be divided exactly by 2 (even number)")
 					continue
 				}
+				tresh := block["ignore_thresh"]
+				ignoretr, err := strconv.ParseFloat(tresh, 32)
+				if err != nil {
+					fmt.Printf("Something wrong with yolo layer. Check treshold param")
+					continue
+				}
+
 				anchors := make([]int, len(anchorsSplit))
 				for l := range anchorsSplit {
 					anchorsSplit[l] = strings.TrimSpace(anchorsSplit[l])
@@ -276,21 +272,13 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 						fmt.Printf("Each element of 'anchors' parameter for yolo layer should be an integer: %s\n", err.Error())
 					}
 				}
-				anchorsPairs := [][2]int{}
-				for a := 0; a < len(anchors); a += 2 {
-					anchorsPairs = append(anchorsPairs, [2]int{anchors[a], anchors[a+1]})
-				}
-				selectedAnchors := [][2]int{}
-				for m := range masks {
-					selectedAnchors = append(selectedAnchors, anchorsPairs[masks[m]])
-				}
 
 				var l layerN = &yoloLayer{
-					masks:          masks,
-					anchors:        selectedAnchors,
-					flattenAhcnors: anchors,
-					inputSize:      inputS[2],
-					classesNum:     classesNumber,
+					mask:       masks,
+					anchors:    anchors,
+					inputSize:  inputS[2],
+					classesNum: classesNumber,
+					treshold:   float32(ignoretr),
 				}
 				yoloBlock, err := l.ToNode(g, input)
 				if err != nil {
@@ -300,11 +288,11 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = yoloBlock
 
 				layers = append(layers, &l)
-				fmt.Println(i, l, "\n", input.Shape())
-
-				// @todo detection node? or just flow?
+				fmt.Println(i, l)
 
 				filtersIdx = prevFilters
+				model.out = append(model.out, input)
+				fmt.Println("YOLO:", yoloBlock)
 				break
 			case "maxpool":
 				sizeStr, ok := block["size"]
@@ -341,7 +329,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				input = maxpoolingBlock
 
 				layers = append(layers, &l)
-				fmt.Println(i, l, "\n", input.Shape())
+				fmt.Println(i, l)
 
 				filtersIdx = prevFilters
 				break
@@ -354,11 +342,11 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 		outputFilters = append(outputFilters, filtersIdx)
 	}
 
-	fmt.Println("Loading weights...")
+	fmt.Println("\nLoading weights...\n")
 	// lastIdx := 5 // skip first 5 values
 	epsilon := float32(0.000001)
 
-	ptr := 0
+	ptr := 5
 	for i := range layers {
 		l := *layers[i]
 		layerType := l.Type()
@@ -372,7 +360,6 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				isize := layer.bnOut.Shape()[2:4].TotalSize()
 
 				beta = weightsData[ptr : ptr+biasesNum]
-				fmt.Println(len(beta), layer.bnOut.Shape(), isize)
 				betat, err := tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(beta)).Repeat(0, isize)
 				if err != nil {
 					panic(err)
@@ -443,7 +430,6 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				}
 				err = gorgonia.Let(layer.biases, biasT)
 			}
-			fmt.Println("SHAPE:", layer.kernels.Shape())
 			err = gorgonia.Let(layer.kernels, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()...), tensor.WithBacking(kernelW)))
 			if err != nil {
 				panic(err)
@@ -451,5 +437,5 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 			ptr += weightsNumel
 		}
 	}
-	return nil, nil
+	return model, nil
 }
