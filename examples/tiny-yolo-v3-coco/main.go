@@ -42,10 +42,6 @@ func main() {
 		panic(err)
 	}
 	fmt.Println("Net forwarded!")
-	for _, o := range model.out {
-		fmt.Println(o.Shape())
-	}
-	// out := gorgonia.Must(gorgonia.Concat(1, model.out...))
-	// fmt.Println(out)
-
+	fmt.Println(model.out[0].Value())
+	model.GetDetections()
 }

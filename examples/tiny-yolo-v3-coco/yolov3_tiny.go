@@ -345,7 +345,6 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 	fmt.Println("\nLoading weights...\n")
 	// lastIdx := 5 // skip first 5 values
 	epsilon := float32(0.000001)
-
 	ptr := 5
 	for i := range layers {
 		l := *layers[i]
@@ -397,6 +396,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				}
 
 				vars = weightsData[ptr : ptr+biasesNum]
+
 				err = gorgonia.Let(layer.vars, tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(biasesNum), tensor.WithBacking(vars)))
 				ptr += biasesNum
 				if err != nil {
@@ -421,10 +421,13 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 				}
 			}
 			if layer.bias {
-				// fmt.Println(biases)
+				isize := layer.convOut.Shape()[2:4].TotalSize()
 				biasT, err := tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(layer.kernels.Shape()[0]), tensor.WithBacking(biases)).Repeat(0, isize)
-				err = biasT.Reshape(layer.kernels.Shape()...)
-				// fmt.Println(biasT)
+				if err != nil {
+					panic(err)
+				}
+				fmt.Println(layer.kernels.Shape()[0], biasT.Shape())
+				err = biasT.Reshape(layer.convOut.Shape()...)
 				if err != nil {
 					panic(err)
 				}

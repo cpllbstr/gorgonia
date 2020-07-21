@@ -45,13 +45,15 @@ func (l *convLayer) Type() string {
 
 func (l *convLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gorgonia.Node, error) {
 	l.kernels = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.filters, input[0].Shape()[1], l.kernelSize, l.kernelSize), gorgonia.WithName(fmt.Sprintf("conv_%d", l.layerIndex)))
-	if l.bias {
-		l.biases = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.kernels.Shape()...), gorgonia.WithName(fmt.Sprintf("bias_%d", l.layerIndex)))
-	}
+
 	var err error
 	l.convOut, err = gorgonia.Conv2d(input[0], l.kernels, tensor.Shape{l.kernelSize, l.kernelSize}, []int{l.padding, l.padding}, []int{l.stride, l.stride}, []int{1, 1})
 	if err != nil {
 		return &gorgonia.Node{}, errors.Wrap(err, "Can't prepare convolution operation")
+	}
+
+	if l.bias {
+		l.biases = gorgonia.NewTensor(g, tensor.Float32, 4, gorgonia.WithShape(l.convOut.Shape()...), gorgonia.WithName(fmt.Sprintf("bias_%d", l.layerIndex)))
 	}
 
 	if l.batchNormalize > 0 {
@@ -65,10 +67,11 @@ func (l *convLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gor
 		}
 		l.outShape = l.bnOut.Shape()
 	} else {
-		// l.convOut, err = gorgonia.Add(l.convOut, l.biases)
-		// if err != nil {
-		// panic(err)
-		// }
+		fmt.Println("SHP:", l.biases.Shape(), l.convOut.Shape())
+		l.convOut, err = gorgonia.Add(l.convOut, l.biases)
+		if err != nil {
+			panic(err)
+		}
 		l.outShape = l.convOut.Shape()
 		l.bnOut = l.convOut
 	}
