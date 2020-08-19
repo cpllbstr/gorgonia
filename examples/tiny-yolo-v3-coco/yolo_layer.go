@@ -45,7 +45,8 @@ func (l *yoloLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gor
 	for i := range l.masks {
 		masksIdx[i] = i
 	}
-	yoloNode, err := gorgonia.YOLOv3(inputN, flattenAnchorsF32, masksIdx, l.inputSize, l.classesNum, l.ignoreThresh)
+	yoloNode, yoloTrainer, err := gorgonia.YOLOv3(inputN, flattenAnchorsF32, masksIdx, l.inputSize, l.classesNum, l.ignoreThresh)
+	l.yoloTrainer = &yoloTrainer
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't prepare YOLOv3 operation")
 	}
