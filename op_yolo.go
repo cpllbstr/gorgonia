@@ -36,11 +36,12 @@ func (op *yoloOp) SetTarget(target []float32) {
 		fmt.Println("Training parameters were not set. Initializing empty slices....")
 		op.training = &yoloTraining{}
 	}
-	op.training.scales = make([]float32, preparedNumOfElements)
-	op.training.targets = make([]float32, preparedNumOfElements)
-	for i := range op.training.scales {
-		op.training.scales[i] = 1
+
+	tmpScales := make([]float32, preparedNumOfElements)
+	for i := range tmpScales {
+		tmpScales[i] = 1
 	}
+	tmpTargets := make([]float32, preparedNumOfElements)
 
 	gridSizeF32 := float32(op.gridSize)
 	op.bestAnchors = getBestAnchors_f32(target, op.anchors, op.masks, op.dimensions, gridSizeF32)
@@ -54,21 +55,24 @@ func (op *yoloOp) SetTarget(target []float32) {
 		gw := math32.Log(target[i*5+3]/op.anchors[bestAnchor] + 1e-16)
 		gh := math32.Log(target[i*5+4]/op.anchors[bestAnchor+1] + 1e-16)
 		bboxIdx := gjInt*op.gridSize*(5+op.numClasses)*len(op.masks) + giInt*(5+op.numClasses)*len(op.masks) + op.bestAnchors[i][0]*(5+op.numClasses)
-		op.training.scales[bboxIdx] = scale
-		op.training.targets[bboxIdx] = gx
-		op.training.scales[bboxIdx+1] = scale
-		op.training.targets[bboxIdx+1] = gy
-		op.training.scales[bboxIdx+2] = scale
-		op.training.targets[bboxIdx+2] = gw
-		op.training.scales[bboxIdx+3] = scale
-		op.training.targets[bboxIdx+3] = gh
-		op.training.targets[bboxIdx+4] = 1
+		tmpScales[bboxIdx] = scale
+		tmpTargets[bboxIdx] = gx
+		tmpScales[bboxIdx+1] = scale
+		tmpTargets[bboxIdx+1] = gy
+		tmpScales[bboxIdx+2] = scale
+		tmpTargets[bboxIdx+2] = gw
+		tmpScales[bboxIdx+3] = scale
+		tmpTargets[bboxIdx+3] = gh
+		tmpTargets[bboxIdx+4] = 1.0
 		for j := 0; j < op.numClasses; j++ {
 			if j == int(target[i*5]) {
-				op.training.targets[bboxIdx+5+j] = 1
+				tmpTargets[bboxIdx+5+j] = 1.0
 			}
 		}
 	}
+
+	op.training.scales = tensor.New(tensor.WithShape(preparedNumOfElements), tensor.Of(tensor.Float32), tensor.WithBacking(tmpScales))
+	op.training.targets = tensor.New(tensor.WithShape(preparedNumOfElements), tensor.Of(tensor.Float32), tensor.WithBacking(tmpTargets))
 }
 
 type yoloOp struct {
@@ -85,10 +89,10 @@ type yoloOp struct {
 }
 
 type yoloTraining struct {
-	inputs  []float32
-	bboxes  []float32
-	scales  []float32
-	targets []float32
+	inputs  tensor.Tensor
+	bboxes  tensor.Tensor
+	scales  tensor.Tensor
+	targets tensor.Tensor
 }
 
 func newYoloOp(anchors []float32, masks []int, netSize, gridSize, numClasses int, ignoreTresh float32) *yoloOp {
@@ -232,54 +236,23 @@ func (op *yoloOp) Do(inputs ...Value) (retVal Value, err error) {
 	if op.training == nil {
 		return nil, fmt.Errorf("Nil pointer on training params in yoloOp [Training mode]")
 	}
-	op.training.inputs, err = convertTensorToFloat32(inputTensor)
+	err = inputTensor.Reshape(inputTensor.Shape().TotalSize())
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't cast tensor to []float32 for inputs [Training mode]")
 	}
-	op.training.bboxes, err = convertTensorToFloat32(yoloBBoxes)
+	op.training.inputs = inputTensor
+	err = yoloBBoxes.Reshape(yoloBBoxes.Shape().TotalSize())
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't cast tensor to []float32 for bboxes [Training mode]")
 	}
+	op.training.bboxes = yoloBBoxes
 
-	preparedYOLOout := prepareOutputYOLO_f32(
+	return prepareOutputYOLOTensors(
 		op.training.inputs, op.training.bboxes,
 		op.training.targets, op.training.scales,
 		op.bestAnchors, op.masks,
 		op.numClasses, op.dimensions, op.gridSize, op.ignoreTresh,
 	)
-
-	yoloTensor := &tensor.Dense{}
-	switch inputNumericType {
-	case Float32:
-		yoloTensor = tensor.New(tensor.WithShape(1, op.gridSize*op.gridSize*len(op.masks), 5+op.numClasses), tensor.Of(tensor.Float32), tensor.WithBacking(preparedYOLOout))
-	case Float64:
-		return nil, fmt.Errorf("Float64 not handled yet for YOLO tensor [Training mode]")
-	default:
-		return nil, fmt.Errorf("yoloOp supports only Float32/Float64 types for YOLO tensor [Training mode]")
-	}
-
-	return yoloTensor, nil
-}
-
-func convertTensorToFloat32(in tensor.Tensor) (input32 []float32, err error) {
-	in.Reshape(in.Shape().TotalSize())
-	input32 = make([]float32, 0)
-	input32 = make([]float32, in.Shape().TotalSize())
-	for i := 0; i < in.Shape()[0]; i++ {
-		var buf interface{}
-		buf, err = in.At(i)
-		switch in.Dtype() {
-		case Float32:
-			input32[i] = buf.(float32)
-			break
-		case Float64:
-			input32[i] = float32(buf.(float64))
-			break
-		default:
-			return nil, fmt.Errorf("convertTensorToFloat32() supports only Float32/Float64 types of tensor")
-		}
-	}
-	return input32, nil
 }
 
 func (op *yoloOp) evaluateYOLO_f32(input tensor.Tensor, batchSize, stride, grid, bboxAttrs, numAnchors int, currentAnchors []float32) (retVal tensor.Tensor, err error) {
@@ -380,14 +353,24 @@ func iou_f32(r1, r2 image.Rectangle) float32 {
 	return float32(interArea) / float32(r1Area+r2Area-interArea)
 }
 
-func getBestIOU_f32(input, target []float32, numClasses, dims int) [][]float32 {
+func getBestIOU_f32(input, target tensor.Tensor, numClasses, dims int) [][]float32 {
 	ious := make([][]float32, 0)
 	imgsize := float32(dims)
-	for i := 0; i < len(input); i = i + numClasses + 5 {
+	for i := 0; i < input.Shape().TotalSize(); i = i + numClasses + 5 {
 		ious = append(ious, []float32{0, -1})
-		r1 := rectifyBox_f32(input[i], input[i+1], input[i+2], input[i+3], dims)
-		for j := 0; j < len(target); j = j + 5 {
-			r2 := rectifyBox_f32(target[j+1]*imgsize, target[j+2]*imgsize, target[j+3]*imgsize, target[j+4]*imgsize, dims)
+		input_0, _ := input.At(i)
+		input_1, _ := input.At(i + 1)
+		input_2, _ := input.At(i + 2)
+		input_3, _ := input.At(i + 3)
+		r1 := rectifyBox_f32(input_0.(float32), input_1.(float32), input_2.(float32), input_3.(float32), dims)
+		for j := 0; j < target.Shape().TotalSize(); j = j + 5 {
+
+			target_0, _ := target.At(j + 1)
+			target_1, _ := target.At(j + 2)
+			target_2, _ := target.At(j + 3)
+			target_3, _ := target.At(i + 4)
+
+			r2 := rectifyBox_f32(target_0.(float32)*imgsize, target_1.(float32)*imgsize, target_2.(float32)*imgsize, target_3.(float32)*imgsize, dims)
 			curiou := iou_f32(r1, r2)
 			if curiou > ious[i/(5+numClasses)][0] {
 				ious[i/(5+numClasses)][0] = curiou
@@ -422,12 +405,16 @@ func getBestAnchors_f32(target []float32, anchors []float32, masks []int, dims i
 	return bestAnchors
 }
 
-func prepareOutputYOLO_f32(input, yoloBoxes, target, scales []float32, bestAnchors [][]int, masks []int, numClasses, dims, gridSize int, ignoreTresh float32) []float32 {
-	yoloBBoxes := make([]float32, len(yoloBoxes))
+func prepareOutputYOLOTensors(input, yoloBoxes, target, scales tensor.Tensor, bestAnchors [][]int, masks []int, numClasses, dims, gridSize int, ignoreTresh float32) (tensor.Tensor, error) {
+	tmpBBoxes := make([]float32, yoloBoxes.Shape().TotalSize())
 	bestIous := getBestIOU_f32(yoloBoxes, target, numClasses, dims)
-	for i := 0; i < len(yoloBoxes); i = i + (5 + numClasses) {
+	for i := 0; i < yoloBoxes.Shape().TotalSize(); i = i + (5 + numClasses) {
 		if bestIous[i/(5+numClasses)][0] <= ignoreTresh {
-			yoloBBoxes[i+4] = bceLoss32(0, yoloBoxes[i+4])
+			bboxValue, err := yoloBoxes.At(i + 4)
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't extract YOLO BBox value (before slicing)")
+			}
+			tmpBBoxes[i+4] = bceLoss32(0, bboxValue.(float32))
 		}
 	}
 	for i := 0; i < len(bestAnchors); i++ {
@@ -435,16 +422,59 @@ func prepareOutputYOLO_f32(input, yoloBoxes, target, scales []float32, bestAncho
 			giInt := bestAnchors[i][1]
 			gjInt := bestAnchors[i][2]
 			boxi := gjInt*gridSize*(5+numClasses)*len(masks) + giInt*(5+numClasses)*len(masks) + bestAnchors[i][0]*(5+numClasses)
-			yoloBBoxes[boxi] = mseLoss32(target[boxi], input[boxi], scales[boxi])
-			yoloBBoxes[boxi+1] = mseLoss32(target[boxi+1], input[boxi+1], scales[boxi+1])
-			yoloBBoxes[boxi+2] = mseLoss32(target[boxi+2], input[boxi+2], scales[boxi+2])
-			yoloBBoxes[boxi+3] = mseLoss32(target[boxi+3], input[boxi+3], scales[boxi+3])
+			inputsSlice, err := input.Slice(S(boxi, boxi+4))
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't slice inputs for BBoxes")
+			}
+			scalesSlice, err := scales.Slice(S(boxi, boxi+4))
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't slice scales for BBoxes")
+			}
+			targetsSlice, err := target.Slice(S(boxi, boxi+4))
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't slice targets for BBoxes")
+			}
+			mseTensor, err := mseLossTensors(targetsSlice, inputsSlice, scalesSlice)
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't evaluate MSE for BBoxes")
+			}
+			mseIdx_0, err := mseTensor.At(0)
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't extract MSE value at position 0 for BBoxes")
+			}
+			mseIdx_1, err := mseTensor.At(1)
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't extract MSE value at position 1 for BBoxes")
+			}
+			mseIdx_2, err := mseTensor.At(2)
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't extract MSE value at position 2 for BBoxes")
+			}
+			mseIdx_3, err := mseTensor.At(3)
+			if err != nil {
+				return nil, errors.Wrap(err, "Can't extract MSE value at position 3 for BBoxes")
+			}
+
+			tmpBBoxes[boxi] = mseIdx_0.(float32)
+			tmpBBoxes[boxi+1] = mseIdx_1.(float32)
+			tmpBBoxes[boxi+2] = mseIdx_2.(float32)
+			tmpBBoxes[boxi+3] = mseIdx_3.(float32)
+
 			for j := 0; j < numClasses+1; j++ {
-				yoloBBoxes[boxi+4+j] = bceLoss32(target[boxi+4+j], yoloBoxes[boxi+4+j])
+				bboxValue, err := yoloBoxes.At(boxi + 4 + j)
+				if err != nil {
+					return nil, errors.Wrap(err, "Can't extract YOLO BBox value")
+				}
+				targetValue, err := target.At(boxi + 4 + j)
+				if err != nil {
+					return nil, errors.Wrap(err, "Can't extract target value")
+				}
+				tmpBBoxes[boxi+4+j] = bceLoss32(targetValue.(float32), bboxValue.(float32))
 			}
 		}
 	}
-	return yoloBBoxes
+
+	return tensor.New(tensor.WithShape(1, gridSize*gridSize*len(masks), 5+numClasses), tensor.Of(tensor.Float32), tensor.WithBacking(tmpBBoxes)), nil
 }
 
 func findIntElement(arr []int, ele int) int {
@@ -467,8 +497,43 @@ func bceLoss32(target, pred float32) float32 {
 	return -(math32.Log((1.0 - pred) + 1e-16))
 }
 
-func mseLoss32(target, pred, scale float32) float32 {
-	return math32.Pow(scale*(target-pred), 2) / 2.0
+func bceLossTensors(target float32, pred tensor.Tensor) (tensor.Tensor, error) {
+	if target == 1.0 {
+		return pred.Apply(_bceLossOverflow)
+	}
+	return pred.Apply(_bceLoss)
+}
+
+func _bceLossOverflow(x float32) float32 {
+	return -(math32.Log(x + 1e-16))
+}
+
+func _bceLoss(x float32) float32 {
+	return -(math32.Log((1.0 - x) + 1e-16))
+}
+
+func mseLossTensors(target, pred, scale tensor.Tensor) (tensor.Tensor, error) {
+	sub, err := tensor.Sub(target, pred) // (target-pred)
+	if err != nil {
+		return nil, err
+	}
+	mul, err := tensor.Mul(scale, sub) // scale*(target-pred)
+	if err != nil {
+		return nil, err
+	}
+	pow2, err := tensor.Mul(mul, mul) // math32.Pow(scale*(target-pred), 2)
+	if err != nil {
+		return nil, err
+	}
+	div, err := pow2.Apply(_divBy2) // math32.Pow(scale*(target-pred), 2) / 2.0
+	if err != nil {
+		return nil, err
+	}
+	return div, err
+}
+
+func _divBy2(x float32) float32 {
+	return float32(x / 2.0)
 }
 
 func invsigm32(target float32) float32 {
@@ -518,7 +583,10 @@ func (op *yoloDiffOp) Do(inputs ...Value) (Value, error) {
 	case tensor.Float32:
 		inGradData := inGrad.Data().([]float32)
 		outGradData := output.Data().([]float32)
-		op.f32(inGradData, outGradData, op.training.scales, op.training.inputs, op.training.targets, op.training.bboxes)
+		err := op.f32(inGradData, outGradData, op.training.scales, op.training.inputs, op.training.targets, op.training.bboxes)
+		if err != nil {
+			return nil, fmt.Errorf("yoloDiffOp can't evalute gradients")
+		}
 		break
 	case tensor.Float64:
 		return nil, fmt.Errorf("yoloDiffOp for Float64 is not implemented yet")
@@ -545,43 +613,45 @@ func (op *yoloDiffOp) Do(inputs ...Value) (Value, error) {
 	return inGrad, nil
 }
 
-func (op *yoloDiffOp) f32(inGradData, outGradData, scales, inputs, targets, bboxes []float32) {
+func (op *yoloDiffOp) f32(inGradData, outGradData []float32, scales, inputs, targets, bboxes tensor.Tensor) error {
 	for i := range inGradData {
 		inGradData[i] = 0
 	}
 	for i := 0; i < len(outGradData); i = i + 5 + op.numClasses {
 		for j := 0; j < 4; j++ {
-			inGradData[i+j] = outGradData[i+j] * (scales[i+j] * scales[i+j] * (inputs[i+j] - targets[i+j]))
+			inputValue, err := inputs.At(i + j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract input value")
+			}
+			scaleValue, err := scales.At(i + j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract scale value")
+			}
+			targetValue, err := targets.At(i + j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract target value")
+			}
+			inGradData[i+j] = outGradData[i+j] * (scaleValue.(float32) * scaleValue.(float32) * (inputValue.(float32) - targetValue.(float32)))
 		}
 		for j := 4; j < 5+op.numClasses; j++ {
 			if outGradData[i+j] != 0 {
-				if targets[i+j] == 0 {
-					inGradData[i+j] = outGradData[i+j] * (bboxes[i+j])
+				inputValue, err := bboxes.At(i + j)
+				if err != nil {
+					return errors.Wrap(err, "Can't extract bbox value")
+				}
+				targetValue, err := targets.At(i + j)
+				if err != nil {
+					return errors.Wrap(err, "Can't extract target value")
+				}
+				if targetValue.(float32) == 0 {
+					inGradData[i+j] = outGradData[i+j] * (inputValue.(float32))
 				} else {
-					inGradData[i+j] = outGradData[i+j] * (1 - bboxes[i+j])
+					inGradData[i+j] = outGradData[i+j] * (1 - inputValue.(float32))
 				}
 			}
 		}
 	}
-}
-func (op *yoloDiffOp) f64(inGradData, outGradData, scales, inputs, targets, bboxes []float64) {
-	for i := range inGradData {
-		inGradData[i] = 0
-	}
-	for i := 0; i < len(outGradData); i = i + 5 + op.numClasses {
-		for j := 0; j < 4; j++ {
-			inGradData[i+j] = outGradData[i+j] * (scales[i+j] * scales[i+j] * (inputs[i+j] - targets[i+j]))
-		}
-		for j := 4; j < 5+op.numClasses; j++ {
-			if outGradData[i+j] != 0 {
-				if targets[i+j] == 0 {
-					inGradData[i+j] = outGradData[i+j] * (bboxes[i+j])
-				} else {
-					inGradData[i+j] = outGradData[i+j] * (1 - bboxes[i+j])
-				}
-			}
-		}
-	}
+	return nil
 }
 
 func (op *yoloOp) DoDiff(ctx ExecutionContext, inputs Nodes, output *Node) (err error) {
