@@ -14,7 +14,7 @@ type yoloLayer struct {
 	inputSize      int
 	classesNum     int
 	ignoreThresh   float32
-	yoloTrainer    *gorgonia.YoloTrainer
+	yoloTrainer    gorgonia.YoloTrainer
 }
 
 func (l *yoloLayer) String() string {
@@ -46,7 +46,7 @@ func (l *yoloLayer) ToNode(g *gorgonia.ExprGraph, input ...*gorgonia.Node) (*gor
 		masksIdx[i] = i
 	}
 	yoloNode, yoloTrainer, err := gorgonia.YOLOv3(inputN, flattenAnchorsF32, masksIdx, l.inputSize, l.classesNum, l.ignoreThresh)
-	l.yoloTrainer = &yoloTrainer
+	l.yoloTrainer = yoloTrainer
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't prepare YOLOv3 operation")
 	}

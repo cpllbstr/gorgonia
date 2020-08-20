@@ -20,7 +20,7 @@ type YOLOv3 struct {
 	layersInfo                        []string
 
 	learningNodes []*gorgonia.Node
-	training      []*gorgonia.YoloTrainer
+	training      []gorgonia.YoloTrainer
 }
 
 // Print Print architecture of network
@@ -105,7 +105,7 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 
 	yoloNodes := []*gorgonia.Node{}
 	learningNodes := []*gorgonia.Node{}
-	yoloTrainers := []*gorgonia.YoloTrainer{}
+	yoloTrainers := []gorgonia.YoloTrainer{}
 	for i := range blocks {
 		block := blocks[i]
 		filtersIdx := 0
@@ -387,7 +387,6 @@ func NewYoloV3Tiny(g *gorgonia.ExprGraph, input *gorgonia.Node, classesNumber, b
 					inputSize:      inputS[2],
 					classesNum:     classesNumber,
 					ignoreThresh:   float32(ignoreThresh64),
-					yoloTrainer:    &gorgonia.YoloTrainer{},
 				}
 
 				var l layerN = &yoloL
