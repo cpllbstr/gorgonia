@@ -92,7 +92,7 @@ func main() {
 			return
 		}
 
-		err = model.SetTarget(labeledData[0])
+		err = model.SetTarget(labeledData["test"])
 		if err != nil {
 			fmt.Printf("Can't set []float32 as target due the error: %s\n", err.Error())
 			return
@@ -170,13 +170,13 @@ func main() {
 	}
 }
 
-func parseFolder(dir string) ([][]float32, error) {
+func parseFolder(dir string) (map[string][]float32, error) {
 	filesInfo, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	targets := [][]float32{}
+	targets := map[string][]float32{}
 	for i := range filesInfo {
 		sliceOfF32 := []float32{}
 		fileInfo := filesInfo[i]
@@ -202,7 +202,7 @@ func parseFolder(dir string) ([][]float32, error) {
 			}
 			sliceOfF32 = append(sliceOfF32, float32(entityF32))
 		}
-		targets = append(targets, sliceOfF32)
+		targets[strings.Split(fileInfo.Name(), ".")[0]] = sliceOfF32
 	}
 
 	if len(targets) == 0 {
