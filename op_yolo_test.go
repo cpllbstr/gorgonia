@@ -1,6 +1,7 @@
 package gorgonia
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -9,107 +10,76 @@ import (
 )
 
 func TestYolo(t *testing.T) {
-	input := tensor.New(tensor.Of(tensor.Float32))
-	r, _ := os.Open("./1input.[(10, 13), (16, 30), (33, 23)].npy")
-	input.ReadNpy(r)
-	output := tensor.New(tensor.Of(tensor.Float32))
-	r, _ = os.Open("./1output.[(10, 13), (16, 30), (33, 23)].npy")
-	output.ReadNpy(r)
 
-	g := NewGraph()
-	inp := NewTensor(g, tensor.Float32, 4,
-		WithShape(input.Shape()...),
-		WithName("inp"),
-	)
+	inputSize := 416
+	numClasses := 80
+	testAnchors := [][]float32{
 
-	// fmt.Println(input)
-	out := Must(YoloDetector(inp, []float64{10, 13, 16, 30, 33, 23}, 416, 80))
-
-	// t.Log("\n", inp.Value())
-	vm := NewTapeMachine(g)
-	if err := Let(inp, input); err != nil {
-		panic(err)
-	}
-	vm.RunAll()
-	vm.Close()
-
-	t.Log("Got:\n", out.Value())
-	t.Log("Expected:\n", output)
-
-	// ff, _ := os.Create("./myout.npy")
-
-	// out.Value().(*tensor.Dense).WriteNpy(ff)
-	if !assert.Equal(t, out.Value().Data(), output.Data(), "Output is not equal to expected value") {
-		panic("NOT EQUEAL")
+		[]float32{10, 13, 16, 30, 33, 23},
+		[]float32{30, 51, 62, 45, 59, 119},
+		[]float32{116, 90, 156, 198, 373, 326},
 	}
 
-	// e := []float64{
-	// 	0, 0, 0, 0, 1, 0, 1, 0, 2, 0, 2, 0,
-	// 	0, 1, 0, 1, 1, 1, 1, 1, 2, 1, 2, 1,
-	// 	0, 2, 0, 2, 1, 2, 1, 2, 2, 2, 2, 2,
-	// }
-	/*in := tensor.New(
-		tensor.Of(tensor.Float32),
-		tensor.WithBacking(Zeroes()),
-		tensor.WithShape(1, 18, 2),
-	)
-	// in.Reshape()
-	// fmt.Println(in)
+	numpyInputs := []string{
+		"./examples/tiny-yolo-v3-coco/data/test_yolo_op/1input.[(10, 13), (16, 30), (33, 23)].npy",
+		"./examples/tiny-yolo-v3-coco/data/test_yolo_op/1input.[(30, 61), (62, 45), (59, 119)].npy",
+		"./examples/tiny-yolo-v3-coco/data/test_yolo_op/1input.[(116, 90), (156, 198), (373, 326)].npy",
+	}
 
-	grid := 3
-	numAnchors := 2
+	numpyExpectedOutputs := []string{
+		"./examples/tiny-yolo-v3-coco/data/test_yolo_op/1output.[(10, 13), (16, 30), (33, 23)].npy",
+		"./examples/tiny-yolo-v3-coco/data/test_yolo_op/1output.[(30, 61), (62, 45), (59, 119)].npy",
+		"./examples/tiny-yolo-v3-coco/data/test_yolo_op/1output.[(116, 90), (156, 198), (373, 326)].npy",
+	}
 
-	step := grid * numAnchors
-
-	 for ind := 0; ind < grid; ind++ {
-		vx, err := in.Slice(nil, S(ind*step, ind*step+step), S(1))
+	for i := range testAnchors {
+		// Read input values from numpy format
+		input := tensor.New(tensor.Of(tensor.Float32))
+		r, err := os.Open(numpyInputs[i])
 		if err != nil {
-			panic(err)
+			t.Error(err)
+			return
 		}
-		switch in.Dtype() {
-		case Float32:
-			tensor.Add(vx, float32(ind), tensor.UseUnsafe())
-			break
-		case Float64:
-			tensor.Add(vx, float64(ind), tensor.UseUnsafe())
-			break
-		default:
-			panic("Unsupportable type for Yolo")
+		err = input.ReadNpy(r)
+		if err != nil {
+			t.Error(err)
+			return
 		}
-		// fmt.Println(ind, vx)
 
-		//Tricky part
-		for n := 0; n < numAnchors; n++ {
-			vy, err := in.Slice(nil, S(ind*numAnchors+n, in.Shape()[1], step), S(0))
-			if err != nil {
-				panic(err)
-			}
-			// fmt.Println("VY:", ind, n, vy)
+		// Read expected values from numpy format
+		expected := tensor.New(tensor.Of(tensor.Float32))
+		r, err = os.Open(numpyExpectedOutputs[i])
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		err = expected.ReadNpy(r)
+		if err != nil {
+			t.Error(err)
+			return
+		}
 
-			switch in.Dtype() {
-			case Float32:
-				tensor.Add(vy, float32(ind), tensor.UseUnsafe())
-				break
-			case Float64:
-				tensor.Add(vy, float64(ind), tensor.UseUnsafe())
-				break
-			default:
-				panic("Unsupportable type for Yolo")
-			}
+		// Load graph
+		g := NewGraph()
+		inputTensor := NewTensor(g, tensor.Float32, 4, WithShape(input.Shape()...), WithName("yolo"))
+		// Prepare YOLOv3 node
+		outNode, err := YOLOv3(inputTensor, testAnchors[i], []int{0, 1, 2}, inputSize, numClasses, 0.7)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		// Run operation
+		vm := NewTapeMachine(g)
+		if err := Let(inputTensor, input); err != nil {
+			t.Error(err)
+			return
+		}
+		vm.RunAll()
+		vm.Close()
+
+		// Check if everything is fine
+		if !assert.Equal(t, outNode.Value().Data(), expected.Data(), "Output is not equal to expected value") {
+			t.Error(fmt.Sprintf("Got: %v\nExpected: %v", outNode.Value(), expected))
 		}
 	}
-	in.Reshape(1, 9, 4)
-	for i := 0; i < 9; i++ {
-		if i%3 == 0 {
-			fmt.Println()
-		}
-		x, _ := in.Slice(nil, S(i), S(0))
-		fmt.Print(x)
-	}
-	fmt.Println()
-
-	fmt.Println(in)
-	f, _ := os.Create("./out")
-	defer f.Close()
-	f.WriteString(fmt.Sprint(in.Shape(), "\n", in.Data())) */
 }
