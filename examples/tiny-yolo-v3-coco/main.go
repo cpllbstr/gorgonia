@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ func main() {
 	weightsPath := flag.String("weights", "./data/yolov3-tiny.weights", "Path to weights file")
 	cfgPathStr := flag.String("cfg", "./data/yolov3-tiny.cfg", "Path to net configuration file")
 	trainingFolder := flag.String("train", "./data/test_yolo_op", "Path to folder with labeled data")
+	imgDir := flag.String("imgDir", "./data/test_yolo_op", "Path to folder with labeled data")
 	flag.Parse()
 
 	g := G.NewGraph()
@@ -92,19 +94,9 @@ func main() {
 			return
 		}
 
-		err = model.SetTarget(labeledData["test"])
-		if err != nil {
-			fmt.Printf("Can't set []float32 as target due the error: %s\n", err.Error())
-			return
-		}
 		err = model.ActivateTrainingMode()
 		if err != nil {
 			fmt.Printf("Can't activate training mode due the error: %s\n", err.Error())
-			return
-		}
-		imgf32, err := GetFloat32Image(*imagePathStr, imgHeight, imgWidth)
-		if err != nil {
-			fmt.Printf("Can't read []float32 from image due the error: %s\n", err.Error())
 			return
 		}
 
@@ -133,8 +125,20 @@ func main() {
 
 		tm := G.NewTapeMachine(g, gorgonia.WithPrecompiled(prog, locMap), gorgonia.BindDualValues(model.learningNodes...))
 		defer tm.Close()
+		i := 0
+		fmt.Println("HELO!")
+		for k := range labeledData {
+			err = model.SetTarget(labeledData[k])
+			if err != nil {
+				fmt.Printf("Can't set []float32 as target due the error: %s\n", err.Error())
+				return
+			}
+			imgf32, err := GetFloat32Image(fmt.Sprintf("%s/%s.jpg", *imgDir, k), imgHeight, imgWidth)
+			if err != nil {
+				fmt.Printf("Can't read []float32 from image due the error: %s\n", err.Error())
+				return
+			}
 
-		for i := 0; i < 4000; i++ {
 			image := tensor.New(tensor.WithShape(1, channels, imgHeight, imgWidth), tensor.Of(tensor.Float32), tensor.WithBacking(imgf32))
 			err = G.Let(input, image)
 			if err != nil {
@@ -159,13 +163,14 @@ func main() {
 			if err != nil {
 				fmt.Printf("Can't do solver.Step() in Training mode due the error: %s\n", err.Error())
 			}
+			i++
 
 			tm.Reset()
 		}
 
 		return
 	default:
-		// Can't reach this code because of default value for modeStr.
+		fmt.Printf("Mode %s is not supported!\nTry: training, detector", *modeStr)
 		return
 	}
 }
@@ -207,6 +212,60 @@ func parseFolder(dir string) (map[string][]float32, error) {
 
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("Folder '%s' doesn't contain any *.txt files (annotation files for YOLO)", dir)
+	}
+
+	return targets, nil
+}
+
+func parseTargets(txtDir, imgDir string) (map[string][]float32, error) {
+	imgexist := func(filename string) bool {
+		info, err := os.Stat(imgDir + "/" + filename + ".jpg")
+		if os.IsNotExist(err) {
+			return false
+		}
+		return !info.IsDir()
+	}
+	filesInfo, err := ioutil.ReadDir(txtDir)
+	if err != nil {
+		return nil, err
+	}
+
+	targets := map[string][]float32{}
+	for i := range filesInfo {
+		sliceOfF32 := []float32{}
+		fileInfo := filesInfo[i]
+		// Parse only *.txt files
+		if fileInfo.IsDir() || filepath.Ext(fileInfo.Name()) != ".txt" {
+			continue
+		}
+		img := fmt.Sprintf("%s/%s.jpg", imgDir, strings.Split(fileInfo.Name(), ".")[0])
+		if !imgexist(img) {
+			fmt.Printf("!\tImage %s does not exist!\n", img)
+			continue
+		}
+		filePath := fmt.Sprintf("%s/%s", txtDir, fileInfo.Name())
+		fileBytes, err := ioutil.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		fileContentAsArray := strings.Split(strings.ReplaceAll(string(fileBytes), "\n", " "), " ")
+		for j := range fileContentAsArray {
+			entity := fileContentAsArray[j]
+			if entity == "" {
+				continue
+			}
+			entityF32, err := strconv.ParseFloat(entity, 32)
+			if err != nil {
+				// Do we need return? May be just some warning...
+				return nil, err
+			}
+			sliceOfF32 = append(sliceOfF32, float32(entityF32))
+		}
+		targets[strings.Split(fileInfo.Name(), ".")[0]] = sliceOfF32
+	}
+
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("Folder '%s' doesn't contain any *.txt files (annotation files for YOLO) or folder %s doesn't contain any images", txtDir, imgDir)
 	}
 
 	return targets, nil
