@@ -613,6 +613,18 @@ func (op *yoloDiffOp) Do(inputs ...Value) (Value, error) {
 	return inGrad, nil
 }
 
+func getScalar(inputs tensor.Tensor, index int) (tensor.Tensor, error) {
+	inputValue, err := inputs.At(index)
+	if err != nil {
+		return nil, err
+	}
+	inT := inputValue.(tensor.Tensor)
+	if !inT.IsScalar() {
+		return nil, errors.Errorf("Error fetching data from tensor, data is not a Scalar")
+	}
+	return inT, nil
+}
+
 func (op *yoloDiffOp) f32(inGradData, outGradData []float32, scales, inputs, targets, bboxes tensor.Tensor) error {
 	for i := range inGradData {
 		inGradData[i] = 0
@@ -647,6 +659,86 @@ func (op *yoloDiffOp) f32(inGradData, outGradData []float32, scales, inputs, tar
 					inGradData[i+j] = outGradData[i+j] * (inputValue.(float32))
 				} else {
 					inGradData[i+j] = outGradData[i+j] * (1 - inputValue.(float32))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (op *yoloDiffOp) Tf(inGrad, outGrad, scales, inputs, targets, bboxes tensor.Tensor) error {
+	inGrad.Zero()
+	one := tensor.Ones(inGrad.Dtype(), 1)
+	for i := 0; i < outGrad.Size(); i += 5 + op.numClasses {
+		for j := 0; j < 4; j++ {
+			inputValue, err := getScalar(inputs, i+j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract input value")
+			}
+			scaleValue, err := getScalar(scales, i+j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract scale value")
+			}
+			targetValue, err := getScalar(targets, i+j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract target value")
+			}
+			outValue, err := getScalar(outGrad, i+j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract ourgrad value")
+			}
+			sub, err := tensor.Sub(inputValue, targetValue)
+			if err != nil {
+				return errors.Wrap(err, "Can't subtract")
+			}
+			sc2, err := tensor.Mul(scaleValue, scaleValue)
+			if err != nil {
+				return errors.Wrap(err, "Can't mul scale scale")
+			}
+			scsub, err := tensor.Mul(sc2, sub)
+			if err != nil {
+				return errors.Wrap(err, "Can't mul sc2 sub")
+			}
+			in, err := tensor.Mul(outValue, scsub)
+			if err != nil {
+				return errors.Wrap(err, "Can't mul out scsub")
+			}
+			inGrad.(*tensor.Dense).Set(i+j, in)
+		}
+		for j := 4; j < 5+op.numClasses; j++ {
+			outValue, err := outGrad.At(i + j)
+			if err != nil {
+				return errors.Wrap(err, "Can't extract ourgrad value")
+			}
+			if outValue.(float32) != 0 {
+				inputValue, err := getScalar(bboxes, i+j)
+				if err != nil {
+					return errors.Wrap(err, "Can't extract bbox value")
+				}
+				targetValue, err := targets.At(i + j)
+				if err != nil {
+					return errors.Wrap(err, "Can't extract target value")
+				}
+				outVal, err := getScalar(outGrad, i+j)
+				if err != nil {
+					return errors.Wrap(err, "Can't extract outGrad value")
+				}
+				if targetValue.(float32) == 0 {
+					inGradVal, err := tensor.Mul(outVal, inputValue)
+					if err != nil {
+						return errors.Wrap(err, "Can't mul outval, inp value ")
+					}
+					inGrad.(*tensor.Dense).Set(i+j, inGradVal)
+				} else {
+					sub, err := tensor.Sub(one, inputValue)
+					if err != nil {
+						return errors.Wrap(err, "Can't sub one, inp value ")
+					}
+					inGradVal, err := tensor.Mul(outVal, sub)
+					if err != nil {
+						return errors.Wrap(err, "Can't mul outval, inp value ")
+					}
+					inGrad.(*tensor.Dense).Set(i+j, inGradVal)
 				}
 			}
 		}
