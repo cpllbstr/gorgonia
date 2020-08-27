@@ -579,22 +579,13 @@ func (op *yoloDiffOp) Do(inputs ...Value) (Value, error) {
 	in := inputs[0]
 	output := inputs[1]
 	inGrad := tensor.New(tensor.Of(in.Dtype()), tensor.WithShape(output.Shape().Clone()...), tensor.WithEngine(in.(tensor.Tensor).Engine()))
-	switch in.Dtype() {
-	case tensor.Float32:
-		inGradData := inGrad.Data().([]float32)
-		outGradData := output.Data().([]float32)
-		err := op.f32(inGradData, outGradData, op.training.scales, op.training.inputs, op.training.targets, op.training.bboxes)
-		if err != nil {
-			return nil, fmt.Errorf("yoloDiffOp can't evalute gradients")
-		}
-		break
-	case tensor.Float64:
-		return nil, fmt.Errorf("yoloDiffOp for Float64 is not implemented yet")
-	default:
-		return nil, fmt.Errorf("yoloDiffOp supports only Float32/Float64 types")
+
+	err := op.f(inGrad, output.(tensor.Tensor), op.training.scales, op.training.inputs, op.training.targets, op.training.bboxes)
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't evaluate gradients")
 	}
 
-	err := inGrad.Reshape(1, op.gridSize*op.gridSize, (op.numClasses+5)*len(op.masks))
+	err = inGrad.Reshape(1, op.gridSize*op.gridSize, (op.numClasses+5)*len(op.masks))
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't reshape in yoloDiffOp (1)")
 	}
@@ -613,64 +604,32 @@ func (op *yoloDiffOp) Do(inputs ...Value) (Value, error) {
 	return inGrad, nil
 }
 
-func getScalar(inputs tensor.Tensor, index int) (tensor.Tensor, error) {
-	inputValue, err := inputs.At(index)
+func getScalar(inputs tensor.Tensor, ids ...int) (tensor.Tensor, error) {
+	inputValue, err := inputs.At(ids...)
 	if err != nil {
 		return nil, err
 	}
-	inT := inputValue.(tensor.Tensor)
+	inT := tensor.New(tensor.Of(inputs.Dtype()), tensor.WithShape(1))
+	inT.Set(0, inputValue)
 	if !inT.IsScalar() {
 		return nil, errors.Errorf("Error fetching data from tensor, data is not a Scalar")
 	}
 	return inT, nil
 }
 
-func (op *yoloDiffOp) f32(inGradData, outGradData []float32, scales, inputs, targets, bboxes tensor.Tensor) error {
-	for i := range inGradData {
-		inGradData[i] = 0
-	}
-	for i := 0; i < len(outGradData); i = i + 5 + op.numClasses {
-		for j := 0; j < 4; j++ {
-			inputValue, err := inputs.At(i + j)
-			if err != nil {
-				return errors.Wrap(err, "Can't extract input value")
-			}
-			scaleValue, err := scales.At(i + j)
-			if err != nil {
-				return errors.Wrap(err, "Can't extract scale value")
-			}
-			targetValue, err := targets.At(i + j)
-			if err != nil {
-				return errors.Wrap(err, "Can't extract target value")
-			}
-			inGradData[i+j] = outGradData[i+j] * (scaleValue.(float32) * scaleValue.(float32) * (inputValue.(float32) - targetValue.(float32)))
-		}
-		for j := 4; j < 5+op.numClasses; j++ {
-			if outGradData[i+j] != 0 {
-				inputValue, err := bboxes.At(i + j)
-				if err != nil {
-					return errors.Wrap(err, "Can't extract bbox value")
-				}
-				targetValue, err := targets.At(i + j)
-				if err != nil {
-					return errors.Wrap(err, "Can't extract target value")
-				}
-				if targetValue.(float32) == 0 {
-					inGradData[i+j] = outGradData[i+j] * (inputValue.(float32))
-				} else {
-					inGradData[i+j] = outGradData[i+j] * (1 - inputValue.(float32))
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (op *yoloDiffOp) Tf(inGrad, outGrad, scales, inputs, targets, bboxes tensor.Tensor) error {
+func (op *yoloDiffOp) f(inGrad, outGrad, scales, inputs, targets, bboxes tensor.Tensor) error {
 	inGrad.Zero()
 	one := tensor.Ones(inGrad.Dtype(), 1)
+	oldSh := outGrad.Shape().Clone()
+	// fmt.Println(oldSh)
+	// os.Exit(111)
+	err := outGrad.Reshape(outGrad.Size())
+	if err != nil {
+		panic(errors.Wrap(err, "Reshape error1"))
+	}
 	for i := 0; i < outGrad.Size(); i += 5 + op.numClasses {
 		for j := 0; j < 4; j++ {
+			fmt.Println(i, outGrad.Size(), op.numClasses)
 			inputValue, err := getScalar(inputs, i+j)
 			if err != nil {
 				return errors.Wrap(err, "Can't extract input value")
@@ -685,7 +644,7 @@ func (op *yoloDiffOp) Tf(inGrad, outGrad, scales, inputs, targets, bboxes tensor
 			}
 			outValue, err := getScalar(outGrad, i+j)
 			if err != nil {
-				return errors.Wrap(err, "Can't extract ourgrad value")
+				return errors.Wrap(err, "Can't extract 1outgrad value")
 			}
 			sub, err := tensor.Sub(inputValue, targetValue)
 			if err != nil {
@@ -703,8 +662,9 @@ func (op *yoloDiffOp) Tf(inGrad, outGrad, scales, inputs, targets, bboxes tensor
 			if err != nil {
 				return errors.Wrap(err, "Can't mul out scsub")
 			}
-			inGrad.(*tensor.Dense).Set(i+j, in)
+			inGrad.(*tensor.Dense).Set(i+j, in.ScalarValue())
 		}
+
 		for j := 4; j < 5+op.numClasses; j++ {
 			outValue, err := outGrad.At(i + j)
 			if err != nil {
@@ -728,7 +688,7 @@ func (op *yoloDiffOp) Tf(inGrad, outGrad, scales, inputs, targets, bboxes tensor
 					if err != nil {
 						return errors.Wrap(err, "Can't mul outval, inp value ")
 					}
-					inGrad.(*tensor.Dense).Set(i+j, inGradVal)
+					inGrad.(*tensor.Dense).Set(i+j, inGradVal.ScalarValue())
 				} else {
 					sub, err := tensor.Sub(one, inputValue)
 					if err != nil {
@@ -738,10 +698,15 @@ func (op *yoloDiffOp) Tf(inGrad, outGrad, scales, inputs, targets, bboxes tensor
 					if err != nil {
 						return errors.Wrap(err, "Can't mul outval, inp value ")
 					}
-					inGrad.(*tensor.Dense).Set(i+j, inGradVal)
+					inGrad.(*tensor.Dense).Set(i+j, inGradVal.ScalarValue())
 				}
 			}
 		}
+	}
+	fmt.Println("here", oldSh)
+	err = outGrad.Reshape(oldSh...)
+	if err != nil {
+		panic(errors.Wrap(err, "Reshape error"))
 	}
 	return nil
 }

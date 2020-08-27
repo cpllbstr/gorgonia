@@ -2,14 +2,12 @@ package gorgonia
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"gorgonia.org/tensor"
 )
 
-func TestYolo(t *testing.T) {
+/*func TestYolo(t *testing.T) {
 
 	inputSize := 416
 	numClasses := 80
@@ -82,4 +80,12 @@ func TestYolo(t *testing.T) {
 			t.Error(fmt.Sprintf("Got: %v\nExpected: %v", outNode.Value(), expected))
 		}
 	}
+}
+*/
+
+func TestOP(t *testing.T) {
+	tt := tensor.Ones(tensor.Float32, 1)
+	fmt.Println(tt.At(0))
+	// tensor.New(tensor.Of(tensor.Float32), tensor.WithShape(1), tensor.)
+
 }

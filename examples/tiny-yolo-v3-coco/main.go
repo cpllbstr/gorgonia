@@ -32,7 +32,7 @@ func main() {
 	weightsPath := flag.String("weights", "./data/yolov3-tiny.weights", "Path to weights file")
 	cfgPathStr := flag.String("cfg", "./data/yolov3-tiny.cfg", "Path to net configuration file")
 	trainingFolder := flag.String("train", "./data/test_yolo_op", "Path to folder with labeled data")
-	imgDir := flag.String("imgDir", "./data/test_yolo_op", "Path to folder with labeled data")
+	imgDir := flag.String("imdir", "./data/test_yolo_op", "Path to folder with labeled data")
 	flag.Parse()
 
 	g := G.NewGraph()
